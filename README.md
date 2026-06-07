@@ -1,3 +1,19 @@
-# booktranslate2ua
-# booktranslate2ua
-# booktranslate2ua
+Формати: FB2 (зберігає структуру), EPUB (→ TXT із заголовками), TXT.
+Збереження прогресу — кожен фрагмент зберігається в .translate_cache.json одразу після перекладу. Якщо перервати — при повторному запуску продовжить з місця зупинки. Автозбереження файлу кожні 20 фрагментів.
+Консоль: прогрес-бар з Rich (спінер, %, ETA, час, кількість фрагментів), підсумкова таблиця в кінці, кольоровий вивід помилок.
+Надійність: 4 спроби на фрагмент з наростаючою паузою, при невдачі — зберігає оригінал (не пропускає).
+Залежності: pip install EbookLib rich requests beautifulsoup4 lxml --break-system-packages
+
+Використання:
+
+# Звичайний запуск
+python3 translate_book.py book.fb2
+
+# З вказаним вихідним файлом
+python3 translate_book.py book.epub -o book_ua.txt
+
+# Менші чанки = точніше, але повільніше
+python3 translate_book.py book.txt --chunk-size 500
+
+# Перекласти заново (ігнорувати кеш)
+python3 translate_book.py book.fb2 --force
