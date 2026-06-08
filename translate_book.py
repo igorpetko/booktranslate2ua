@@ -102,10 +102,10 @@ def detect_source_lang(text_sample: str) -> str:
     cyrillic_uk = len(re.findall(r'[іїєґІЇЄҐ]', text_sample))
     latin = len(re.findall(r'[a-zA-Z]', text_sample))
     if latin > len(text_sample) * 0.4:
-        return "англійської"
+        return "англійська"
     if cyrillic_uk > cyrillic_ru * 0.5:
         return "і без того схожа на українську (змішана/українська)"
-    return "російської"
+    return "свино-собача"
 
 # ── Контекстний гід ──────────────────────────────────────────────────────────
 
