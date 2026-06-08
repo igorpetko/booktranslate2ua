@@ -6,14 +6,27 @@
 
 Використання:
 
-# Звичайний запуск
+Звичайний запуск
 python3 translate_book.py book.fb2
 
-# З вказаним вихідним файлом
+З вказаним вихідним файлом
 python3 translate_book.py book.epub -o book_ua.txt
 
-# Менші чанки = точніше, але повільніше
+Менші чанки = точніше, але повільніше
 python3 translate_book.py book.txt --chunk-size 500
 
-# Перекласти заново (ігнорувати кеш)
+Перекласти заново (ігнорувати кеш)
 python3 translate_book.py book.fb2 --force
+
+Автоматично шукає <книга>.guide.md поруч з файлом
+Якщо знайшов — вставляє в системний промпт (до 3000 символів)
+В шапці показує рядок 📋 Гід: назва.guide.md (X символів)
+--guide /path/to/file.md — явний шлях
+
+--analysis-model — модель для аналізу (за замовч. qwen2.5:7b-instruct-q4_K_M)
+
+--translate-model — записується в гід як довідка (за замовч. lapa)
+
+
+
+build_guide.py - додано генерацію .guide.md
