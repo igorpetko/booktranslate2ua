@@ -102,10 +102,10 @@ def detect_source_lang(text_sample: str) -> str:
     cyrillic_uk = len(re.findall(r'[іїєґІЇЄҐ]', text_sample))
     latin = len(re.findall(r'[a-zA-Z]', text_sample))
     if latin > len(text_sample) * 0.4:
-        return "англійська"
+        return "англійської"
     if cyrillic_uk > cyrillic_ru * 0.5:
         return "і без того схожа на українську (змішана/українська)"
-    return "свино-собача"
+    return "російської"
 
 # ── Контекстний гід ──────────────────────────────────────────────────────────
 
@@ -114,18 +114,14 @@ def load_guide(book_path: Path, guide_path: Optional[Path] = None) -> Optional[s
     candidates = []
     if guide_path:
         candidates.append(guide_path)
-    # <book>.guide.md
     candidates.append(book_path.with_suffix(".guide.md"))
-    # <book_stem>.guide.md в тій самій папці
     candidates.append(book_path.parent / (book_path.stem + ".guide.md"))
 
     for p in candidates:
         if p.exists():
             text = p.read_text(encoding="utf-8", errors="replace")
-            # Обрізаємо якщо задовгий
             if len(text) > GUIDE_MAX_CHARS:
                 text = text[:GUIDE_MAX_CHARS] + "\n\n[...гід скорочено для контексту...]"
-
             return text, p
     return None, None
 
@@ -144,28 +140,77 @@ def read_txt(path: Path) -> list[dict]:
 
 
 def read_fb2(path: Path) -> list[dict]:
+    """
+    Зчитує FB2, чітко розділяючи метадані та тіло книги.
+    Текст збирається великими логічними блоками (абзацами), щоб зберегти структуру.
+    """
     soup = BeautifulSoup(path.read_bytes(), "xml")
     sections = []
-    for body in soup.find_all("body"):
-        for sec in body.find_all(["section", "body"], recursive=False):
-            title_tag = sec.find("title")
-            title = title_tag.get_text(" ", strip=True) if title_tag else None
-            # збираємо текст параграфів
-            paras = []
-            for p in sec.find_all("p"):
-                t = p.get_text(" ", strip=True)
-                if t:
-                    paras.append(t)
-            content = "\n\n".join(paras)
-            if content.strip():
-                sections.append({"id": sec.get("id", f"s{len(sections)}"),
-                                  "title": title, "content": content})
-    if not sections:
-        # fallback: весь body як один блок
-        text = soup.get_text("\n\n")
-        sections = [{"id": "fb2", "title": None, "content": text}]
-    return sections
 
+    # 1. Назва книги
+    book_title_tag = soup.find("book-title")
+    if book_title_tag and book_title_tag.get_text(strip=True):
+        sections.append({
+            "id": "meta_title",
+            "title": "Назва книги",
+            "content": book_title_tag.get_text(" ", strip=True),
+            "type": "meta_title"
+        })
+
+    # 2. Анотація
+    annotation_tag = soup.find("annotation")
+    if annotation_tag:
+        paras = [p.get_text(" ", strip=True) for p in annotation_tag.find_all("p") if p.get_text(strip=True)]
+        if paras:
+            sections.append({
+                "id": "meta_annot",
+                "title": "Анотація",
+                "content": "\n\n".join(paras),
+                "type": "meta_annot"
+            })
+
+    # 3. Тіло книги (body -> section)
+    for body_idx, body in enumerate(soup.find_all("body")):
+        # Головний заголовок самого тіла (не розділу)
+        body_title = body.find("title", recursive=False)
+        if body_title:
+            paras = [p.get_text(" ", strip=True) for p in body_title.find_all("p") if p.get_text(strip=True)]
+            if paras:
+                sections.append({
+                    "id": f"body_{body_idx}_title",
+                    "title": "Заголовок книги в тілі",
+                    "content": "\n\n".join(paras),
+                    "type": "body_title"
+                })
+
+        # Секції (розділи) книги
+        for sec_idx, sec in enumerate(body.find_all("section")):
+            sec_id = f"body_{body_idx}_sec_{sec_idx}"
+
+            # Заголовок розділу (напр. Chapter 1)
+            sec_title_tag = sec.find("title", recursive=False)
+            if sec_title_tag:
+                t_paras = [p.get_text(" ", strip=True) for p in sec_title_tag.find_all("p") if p.get_text(strip=True)]
+                if t_paras:
+                    sections.append({
+                        "id": f"{sec_id}_title",
+                        "title": "Назва розділу",
+                        "content": "\n\n".join(t_paras),
+                        "type": "section_title"
+                    })
+
+            # Власне текст розділу (лише прямі параграфи, щоб не змішувати з підсекціями)
+            p_tags = sec.find_all("p", recursive=False)
+            paras = [p.get_text(" ", strip=True) for p in p_tags if p.get_text(strip=True)]
+            if paras:
+                sections.append({
+                    "id": f"{sec_id}_text",
+                    "title": f"Розділ {sec_idx + 1} (текст)",
+                    "content": "\n\n".join(paras),
+                    "type": "section_text"
+                })
+
+    return sections
 
 def read_epub(path: Path) -> list[dict]:
     import ebooklib
@@ -174,7 +219,6 @@ def read_epub(path: Path) -> list[dict]:
     sections = []
     for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
         soup = BeautifulSoup(item.get_body_content(), "html.parser")
-        # заголовок
         h = soup.find(re.compile(r'^h[1-3]$'))
         title = h.get_text(strip=True) if h else None
         paras = [p.get_text(" ", strip=True) for p in soup.find_all("p") if p.get_text(strip=True)]
@@ -265,7 +309,7 @@ class Progress_Store:
 def save_txt(sections: list[dict], out_path: Path, store: Progress_Store):
     lines = []
     for sec in sections:
-        if sec["title"]:
+        if sec.get("title") and sec["type"] == "body_section":
             lines.append(f"\n{'='*60}\n{sec['title']}\n{'='*60}\n")
         for chunk_text in sec["chunks"]:
             cid = chunk_id(chunk_text)
@@ -274,54 +318,113 @@ def save_txt(sections: list[dict], out_path: Path, store: Progress_Store):
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def save_fb2(original_path: Path, sections: list[dict],
-             out_path: Path, store: Progress_Store):
-    """Зберігає перекладений FB2, замінюючи параграфи."""
-    raw = original_path.read_bytes()
-    soup = BeautifulSoup(raw, "xml")
-    # Будуємо словник перекладів chunk -> переклад
-    trans = {}
-    for sec in sections:
-        for chunk_text in sec["chunks"]:
+def save_fb2(original_path: Path, sections: list[dict], out_path: Path, store: Progress_Store):
+    """
+    Зберігає перекладений FB2. Повністю очищає вміст секцій від залишків
+    старих переносів рядків, усуваючи гігантські порожні простори.
+    """
+    soup = BeautifulSoup(original_path.read_bytes(), "xml")
+
+    # Зміна мови документа
+    lang_tag = soup.find("lang")
+    if lang_tag:
+        lang_tag.string = "uk"
+
+    def get_translated_content(sec_dict):
+        translated_chunks = []
+        for chunk_text in sec_dict["chunks"]:
             cid = chunk_id(chunk_text)
-            t = store.get(cid)
-            if t:
-                trans[chunk_text] = t
+            translated_chunks.append(store.get(cid) or chunk_text)
+        return "\n\n".join(translated_chunks)
 
-    # Замінюємо теги <p> на перекладені (наївно: по section)
-    sec_map = {s["id"]: s for s in sections}
-    for body in soup.find_all("body"):
-        for sec_tag in body.find_all("section", recursive=False):
-            sid = sec_tag.get("id", "")
-            sec_data = sec_map.get(sid)
-            if not sec_data:
-                continue
-            # Збираємо перекладені параграфи з chunks
-            translated_text = ""
-            for chunk_text in sec_data["chunks"]:
-                cid = chunk_id(chunk_text)
-                translated_text += "\n\n" + (store.get(cid) or chunk_text)
-            new_paras = [p.strip() for p in translated_text.split("\n\n") if p.strip()]
-            # Очищаємо старі <p>
-            for p in sec_tag.find_all("p"):
-                p.decompose()
-            for para in new_paras:
-                new_p = soup.new_tag("p")
-                new_p.string = para
-                sec_tag.append(new_p)
+    for sec in sections:
+        trans_text = get_translated_content(sec)
+        new_paras = [p.strip() for p in trans_text.split("\n\n") if p.strip()]
 
+        if sec["type"] == "meta_title":
+            tag = soup.find("book-title")
+            if tag:
+                tag.clear()
+                tag.string = trans_text
+
+        elif sec["type"] == "meta_annot":
+            tag = soup.find("annotation")
+            if tag:
+                tag.clear()  # Повністю видаляє весь вміст разом із пробілами
+                for p_txt in new_paras:
+                    p_tag = soup.new_tag("p")
+                    p_tag.string = p_txt
+                    tag.append(p_tag)
+
+        elif sec["type"] == "body_title":
+            body = soup.find("body")
+            if body:
+                tag = body.find("title", recursive=False)
+                if tag:
+                    tag.clear()
+                    for p_txt in new_paras:
+                        p_tag = soup.new_tag("p")
+                        p_tag.string = p_txt
+                        tag.append(p_tag)
+
+        elif sec["type"] in ("section_title", "section_text"):
+            parts = sec["id"].split("_")
+            body_idx = int(parts[1])
+            sec_idx = int(parts[3])
+
+            bodies = soup.find_all("body")
+            if body_idx < len(bodies):
+                secs = bodies[body_idx].find_all("section")
+                if sec_idx < len(secs):
+                    target_sec = secs[sec_idx]
+
+                    if sec["type"] == "section_title":
+                        title_tag = target_sec.find("title", recursive=False)
+                        if title_tag:
+                            title_tag.clear()
+                            for p_txt in new_paras:
+                                p_tag = soup.new_tag("p")
+                                p_tag.string = p_txt
+                                title_tag.append(p_tag)
+
+                    elif sec["type"] == "section_text":
+                        # ВИПРАВЛЕННЯ: замість декомпозиції окремих <p>,
+                        # очищаємо весь текстовий непотріб навколо них
+                        for child in list(target_sec.children):
+                            # Видаляємо старі параграфи та порожні текстові хвости (\n)
+                            if child.name == "p" or (child.name is None and not child.strip()):
+                                child.extract()
+                            # Видаляємо дублікати empty-line, якщо вони йдуть підряд
+                            elif child.name == "empty-line":
+                                child.extract()
+
+                        # Нам потрібен лише один綺麗ний <empty-line/> на початку розділу
+                        if not target_sec.find("empty-line", recursive=False):
+                            # Якщо випадково видалили єдиний — додамо його на початок (після title)
+                            title_tag = target_sec.find("title", recursive=False)
+                            el_tag = soup.new_tag("empty-line")
+                            if title_tag:
+                                title_tag.insert_after(el_tag)
+                            else:
+                                target_sec.insert(0, el_tag)
+
+                        # Додаємо нові перекладені параграфи без сміття
+                        for p_txt in new_paras:
+                            p_tag = soup.new_tag("p")
+                            p_tag.string = p_txt
+                            target_sec.append(p_tag)
+
+    console.print(f"[dim]  FB2: Структуру очищено та успішно збережено[/dim]")
     out_path.write_bytes(soup.encode("utf-8"))
 
-
-def save_result(fmt: str, original_path: Path, sections: list[dict],
-                out_path: Path, store: Progress_Store):
+def save_result(fmt: str, original_path: Path, sections: list[dict], out_path: Path, store: Progress_Store):
     if fmt == "epub":
-        save_txt(sections, out_path, store)  # EPUB -> TXT (проста реконструкція)
+        save_txt(sections, out_path, store)  
     elif fmt == "fb2":
         try:
             save_fb2(original_path, sections, out_path, store)
         except Exception as e:
-            console.print(f"[yellow]FB2 save error ({e}), зберігаю як TXT[/]")
+            console.print(f"[yellow]Помилка збереження FB2 ({e}), бекапимо як TXT[/]")
             save_txt(sections, out_path.with_suffix(".txt"), store)
     else:
         save_txt(sections, out_path, store)
@@ -429,7 +532,7 @@ def translate_book(input_path: Path, output_path: Optional[Path], force: bool, g
 
             # Показуємо прев'ю
             preview = chunk_text[:80].replace("\n", " ")
-            sec_title = sec.get("title") or f"секція {sec['id']}"
+            sec_title = sec.get("title") or f"розділ {sec['id']}"
             progress.update(task,
                 description=f"[cyan]{sec_title[:30]}[/] [dim]{preview}…[/dim]")
 
@@ -439,7 +542,6 @@ def translate_book(input_path: Path, output_path: Optional[Path], force: bool, g
                 store.set(cid, translated)
                 stats["ok"] += 1
             else:
-                # Залишаємо оригінал
                 store.set(cid, chunk_text)
                 stats["fail"] += 1
                 progress.print(f"[red]  ✗ Помилка на фрагменті {idx+1}, залишено оригінал[/]")
@@ -487,8 +589,6 @@ def main():
 Приклади:
   python translate_book.py book.fb2
   python translate_book.py book.epub -o book_ua.txt
-  python translate_book.py book.txt --force
-  python translate_book.py book.fb2 --chunk-size 600
 """)
     parser.add_argument("input", help="Вхідний файл (fb2/epub/txt)")
     parser.add_argument("-o", "--output", help="Вихідний файл (за замовчуванням: <name>_ua.<ext>)")
@@ -514,7 +614,6 @@ def main():
 
     console.rule("[bold yellow]📚 Book Translator UA[/]")
 
-    # Перевірка Ollama
     with console.status("[cyan]Перевіряємо Ollama..."):
         ok = check_ollama()
     if not ok:
@@ -529,7 +628,6 @@ def main():
         sys.exit(1)
 
     output_path = Path(args.output) if args.output else None
-
     guide_path = Path(args.guide) if args.guide else None
     translate_book(input_path, output_path, args.force, guide_path)
 
