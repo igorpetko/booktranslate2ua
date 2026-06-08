@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 translate_book.py — перекладає FB2/EPUB/TXT з EN/RU на UK через Ollama.
-Зберігає прогрес, не пропускає фрагменти, сучасний вивід в консолі.
+Зберігає прогрес, не пропускає фрагменти, красивий вивід у консолі.
 """
 
 import argparse
@@ -47,17 +47,31 @@ MAX_RETRIES = 4
 RETRY_DELAY = 3            # сек між повторами
 TIMEOUT = 120              # сек на один запит
 
-SYSTEM_PROMPT = (
+SYSTEM_PROMPT_BASE = (
     "Ти — професійний літературний перекладач. "
     "Перекладай текст на українську мову точно, зберігаючи стиль, пунктуацію та форматування оригіналу. "
     "Не додавай пояснень, коментарів чи зайвих слів — лише переклад."
 )
+
+SYSTEM_PROMPT_GUIDE = (
+    "Ти — професійний літературний перекладач. "
+    "Перекладай текст на українську мову точно, зберігаючи стиль, пунктуацію та форматування оригіналу. "
+    "Не додавай пояснень, коментарів чи зайвих слів — лише переклад.\n\n"
+    "КОНТЕКСТНИЙ ГАЙД ДЛЯ ЦІЄЇ КНИГИ (дотримуйся суворо):\n"
+    "{guide}"
+)
+
+# Активний системний промпт (може бути замінений якщо є гід)
+SYSTEM_PROMPT = SYSTEM_PROMPT_BASE
 
 TRANSLATE_PROMPT = (
     "Переклади наступний текст на українську мову. "
     "Збережи абзаци, розриви рядків та форматування. "
     "Відповідай ТІЛЬКИ перекладеним текстом:\n\n{text}"
 )
+
+# Максимальна кількість символів гіду що вставляється в промпт
+GUIDE_MAX_CHARS = 3_000
 
 # ── Утиліти ──────────────────────────────────────────────────────────────────
 
@@ -92,6 +106,35 @@ def detect_source_lang(text_sample: str) -> str:
     if cyrillic_uk > cyrillic_ru * 0.5:
         return "і без того схожа на українську (змішана/українська)"
     return "свино-собача"
+
+# ── Контекстний гід ──────────────────────────────────────────────────────────
+
+def load_guide(book_path: Path, guide_path: Optional[Path] = None) -> Optional[str]:
+    """Шукає .guide.md поруч з книгою або за вказаним шляхом."""
+    candidates = []
+    if guide_path:
+        candidates.append(guide_path)
+    # <book>.guide.md
+    candidates.append(book_path.with_suffix(".guide.md"))
+    # <book_stem>.guide.md в тій самій папці
+    candidates.append(book_path.parent / (book_path.stem + ".guide.md"))
+
+    for p in candidates:
+        if p.exists():
+            text = p.read_text(encoding="utf-8", errors="replace")
+            # Обрізаємо якщо задовгий
+            if len(text) > GUIDE_MAX_CHARS:
+                text = text[:GUIDE_MAX_CHARS] + "\n\n[...гід скорочено для контексту...]"
+
+            return text, p
+    return None, None
+
+
+def activate_guide(guide_text: str):
+    """Оновлює глобальний SYSTEM_PROMPT з вмістом гіду."""
+    global SYSTEM_PROMPT
+    SYSTEM_PROMPT = SYSTEM_PROMPT_GUIDE.format(guide=guide_text)
+
 
 # ── Зчитування форматів ──────────────────────────────────────────────────────
 
@@ -285,7 +328,7 @@ def save_result(fmt: str, original_path: Path, sections: list[dict],
 
 # ── Головна логіка ─────────────────────────────────────────────────────────────
 
-def make_header(src_file: str, fmt: str, lang: str, total_chunks: int, done: int):
+def make_header(src_file: str, fmt: str, lang: str, total_chunks: int, done: int, guide_info: str = ""):
     table = Table(box=box.ROUNDED, show_header=False, border_style="cyan",
                   padding=(0, 1), expand=True)
     table.add_column(justify="right", style="bold cyan", min_width=18)
@@ -295,15 +338,22 @@ def make_header(src_file: str, fmt: str, lang: str, total_chunks: int, done: int
     table.add_row("🌐 Мова джерела:", lang)
     table.add_row("🔧 Модель:", MODEL)
     table.add_row("📦 Фрагменти:", f"{done}/{total_chunks} (вже перекладено: {done})")
+    if guide_info:
+        table.add_row("📋 Гід:", guide_info)
     return Panel(table, title="[bold yellow]📚 Book Translator UA[/]",
                  border_style="yellow", padding=(0, 1))
 
 
-def translate_book(input_path: Path, output_path: Optional[Path], force: bool):
+def translate_book(input_path: Path, output_path: Optional[Path], force: bool, guide_path: Optional[Path] = None):
     fmt = input_path.suffix.lower().lstrip(".")
     if fmt not in ("txt", "fb2", "epub"):
         console.print(f"[red]Непідтримуваний формат: {fmt}[/]")
         sys.exit(1)
+
+    # Завантажуємо гід (якщо є)
+    guide_text, guide_found = load_guide(input_path, guide_path)
+    if guide_text:
+        activate_guide(guide_text)
 
     # Читаємо
     console.print(f"\n[cyan]⏳ Читаємо {fmt.upper()}...[/]")
@@ -338,7 +388,8 @@ def translate_book(input_path: Path, output_path: Optional[Path], force: bool):
     if output_path is None:
         output_path = input_path.with_stem(input_path.stem + "_ua")
 
-    console.print(make_header(input_path.name, fmt, lang, total, already_done))
+    guide_info = f"[green]{guide_found.name}[/] ({len(guide_text):,} символів)" if guide_text else "[dim]не знайдено[/dim]"
+    console.print(make_header(input_path.name, fmt, lang, total, already_done, guide_info))
     console.print()
 
     if already_done == total and not force:
@@ -441,6 +492,8 @@ def main():
 """)
     parser.add_argument("input", help="Вхідний файл (fb2/epub/txt)")
     parser.add_argument("-o", "--output", help="Вихідний файл (за замовчуванням: <name>_ua.<ext>)")
+    parser.add_argument("--guide", default=None,
+                        help="Шлях до .guide.md (за замовч. шукає <book>.guide.md поруч з файлом)")
     parser.add_argument("--force", action="store_true",
                         help="Перекладати заново навіть якщо є кеш")
     parser.add_argument("--chunk-size", type=int, default=None,
@@ -477,7 +530,8 @@ def main():
 
     output_path = Path(args.output) if args.output else None
 
-    translate_book(input_path, output_path, args.force)
+    guide_path = Path(args.guide) if args.guide else None
+    translate_book(input_path, output_path, args.force, guide_path)
 
 
 if __name__ == "__main__":
