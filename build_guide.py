@@ -226,7 +226,7 @@ EXTRACT_PROMPT_TEMPLATE = (
     "4. translation_challenges — potential translation difficulties.\n"
     "   Each item: original, challenge (description in Ukrainian).\n\n"
     "Return ONLY this JSON structure:\n"
-    '{"characters":[...],"glossary":[...],"style":{...},"translation_challenges":[...]}\n\n'
+    "Return ONLY valid JSON with keys: characters (list), glossary (list), style (object), translation_challenges (list).\n\n"
     "TEXT TO ANALYZE:\n"
     "{sample}"
 )
@@ -581,16 +581,16 @@ def main():
         help="Вихідний .md (за замовч.: <name>.guide.md)")
     parser.add_argument("--analysis-model", default=None,
         metavar="MODEL",
-        help=f"Модель для аналізу/JSON (за замовч.: {ANALYSIS_MODEL})")
+        help="Модель для аналізу/JSON (за замовч.: qwen2.5:7b-instruct-q4_K_M)")
     parser.add_argument("--translate-model", default=None,
         metavar="MODEL",
-        help=f"Модель для перекладу — записується в гід (за замовч.: {TRANSLATE_MODEL})")
+        help="Модель для перекладу — записується в гід (за замовч.: lapa)")
     parser.add_argument("--no-llm", action="store_true",
         help="Пропустити LLM-аналіз (тільки статистика)")
     parser.add_argument("--no-interactive", action="store_true",
         help="Пропустити інтерактивне заповнення")
     parser.add_argument("--ollama-url", default=None,
-        help=f"URL Ollama (за замовч.: {OLLAMA_URL})")
+        help="URL Ollama (за замовч.: http://localhost:11434)")
     args = parser.parse_args()
 
     global OLLAMA_URL, ANALYSIS_MODEL, TRANSLATE_MODEL
